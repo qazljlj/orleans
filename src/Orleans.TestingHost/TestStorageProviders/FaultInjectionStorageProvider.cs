@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Dynamic;
 using System.Threading.Tasks;
@@ -124,7 +124,7 @@ namespace Orleans.TestingHost
     /// <summary>
     /// Factory to create FaultInjectionGrainStorage
     /// </summary>
-    public class FaultInjectionGrainStorageFactory
+    public static class FaultInjectionGrainStorageFactory
     {
         /// <summary>Create FaultInjectionGrainStorage</summary>
         /// <param name="services"></param>
@@ -134,7 +134,7 @@ namespace Orleans.TestingHost
         public static IGrainStorage Create(IServiceProvider services, string name, Func<IServiceProvider, string, IGrainStorage> injectedGrainStorageFactory)
         {
             return new FaultInjectionGrainStorage(injectedGrainStorageFactory(services,name), name, services.GetRequiredService<ILoggerFactory>(), services.GetRequiredService<IGrainFactory>(),
-                services.GetService<IOptionsSnapshot<FaultInjectionGrainStorageOptions>>().Get(name));
+                services.GetRequiredService<IOptionsMonitor<FaultInjectionGrainStorageOptions>>().Get(name));
         }
     }
 }

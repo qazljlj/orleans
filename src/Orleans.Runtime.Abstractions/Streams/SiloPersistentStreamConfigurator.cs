@@ -5,8 +5,9 @@ using Orleans.Providers;
 using Orleans.Providers.Streams.Common;
 using Orleans.Runtime;
 using Orleans.Storage;
+using Orleans.Streams;
 
-namespace Orleans.Streams
+namespace Orleans.Hosting
 {
     public class PersistentStreamStorageConfigurationValidator : IConfigurationValidator
     {
@@ -39,16 +40,16 @@ namespace Orleans.Streams
         }
     }
 
-    public class SiloPersistentStreamConfigurator : NamedServiceConfigurator<ISiloPersistentStreamConfigurator>, ISiloPersistentStreamConfigurator
+    public class SiloPersistentStreamConfigurator : NamedServiceConfigurator, ISiloPersistentStreamConfigurator
     {
         public SiloPersistentStreamConfigurator(string name, Action<Action<IServiceCollection>> configureDelegate, Func<IServiceProvider, string, IQueueAdapterFactory> adapterFactory)
             : base(name, configureDelegate)
         {
-            ConfigureComponent<IStreamProvider>(PersistentStreamProvider.Create);
-            ConfigureComponent<IControllable>((s, n) => s.GetServiceByName<IStreamProvider>(n) as IControllable);
-            ConfigureComponent<ILifecycleParticipant<ISiloLifecycle>>(PersistentStreamProvider.ParticipateIn<ISiloLifecycle>);
-            ConfigureComponent<IQueueAdapterFactory>(adapterFactory);
-            ConfigureComponent<IConfigurationValidator>(PersistentStreamStorageConfigurationValidator.Create);
+            this.ConfigureComponent(PersistentStreamProvider.Create);
+            this.ConfigureComponent((s, n) => s.GetServiceByName<IStreamProvider>(n) as IControllable);
+            this.ConfigureComponent(PersistentStreamProvider.ParticipateIn<ISiloLifecycle>);
+            this.ConfigureComponent(adapterFactory);
+            this.ConfigureComponent(PersistentStreamStorageConfigurationValidator.Create);
         }
     }
 }

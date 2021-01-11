@@ -3,7 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans;
+using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Runtime.Configuration;
 using Orleans.Runtime.ReminderService;
@@ -27,15 +31,19 @@ namespace UnitTests.Grains
 
         private static long aCCURACY = 50 * TimeSpan.TicksPerMillisecond; // when we use ticks to compute sequence numbers, we might get wrong results as timeouts don't happen with precision of ticks  ... we keep this as a leeway
 
-        private Logger logger;
+        private IOptions<ReminderOptions> reminderOptions;
+
+        private ILogger logger;
         private string myId; // used to distinguish during debugging between multiple activations of the same grain
 
         private string filePrefix;
 
-        public ReminderTestGrain2(IServiceProvider services, IReminderTable reminderTable)
+        public ReminderTestGrain2(IServiceProvider services, IReminderTable reminderTable, ILoggerFactory loggerFactory)
         {
             this.reminderTable = reminderTable;
             this.unvalidatedReminderRegistry = new UnvalidatedReminderRegistry(services);
+            this.logger = loggerFactory.CreateLogger($"{this.GetType().Name}-{this.IdentityString}");
+            this.reminderOptions = services.GetService<IOptions<ReminderOptions>>();
         }
 
         public override Task OnActivateAsync()
@@ -43,10 +51,9 @@ namespace UnitTests.Grains
             this.myId = this.Data.ActivationId.ToString();// new Random().Next();
             this.allReminders = new Dictionary<string, IGrainReminder>();
             this.sequence = new Dictionary<string, long>();
-            this.logger = this.GetLogger(string.Format("ReminderTestGrain {0}_{1}", this.RuntimeIdentity.ToString(), this.Identity));
             this.period = GetDefaultPeriod(this.logger);
             this.logger.Info("OnActivateAsync.");
-            this.filePrefix = "g" + this.Identity.PrimaryKey + "_";
+            this.filePrefix = "g" + this.GrainId.ToString().Replace('/', '_') + "_";
             return GetMissingReminders();
         }
 
@@ -61,10 +68,15 @@ namespace UnitTests.Grains
             TimeSpan usePeriod = p ?? this.period;
             this.logger.Info("Starting reminder {0}.", reminderName);
             IGrainReminder r = null;
+            TimeSpan dueTime;
+            if (reminderOptions.Value.MinimumReminderPeriod < TimeSpan.FromSeconds(2))
+                dueTime = TimeSpan.FromSeconds(2) - reminderOptions.Value.MinimumReminderPeriod;
+            else dueTime = usePeriod - TimeSpan.FromSeconds(2);
+
             if (validate)
-                r = await RegisterOrUpdateReminder(reminderName, usePeriod - TimeSpan.FromSeconds(2), usePeriod);
+                r = await RegisterOrUpdateReminder(reminderName, dueTime, usePeriod);
             else
-                r = await this.unvalidatedReminderRegistry.RegisterOrUpdateReminder(reminderName, usePeriod - TimeSpan.FromSeconds(2), usePeriod);
+                r = await this.unvalidatedReminderRegistry.RegisterOrUpdateReminder(reminderName, dueTime, usePeriod);
 
             this.allReminders[reminderName] = r;
             this.sequence[reminderName] = 0;
@@ -77,7 +89,7 @@ namespace UnitTests.Grains
 
         public Task ReceiveReminder(string reminderName, TickStatus status)
         {
-            // it can happen that due to failure, when a new activation is created, 
+            // it can happen that due to failure, when a new activation is created,
             // it doesn't know which reminders were registered against the grain
             // hence, this activation may receive a reminder that it didn't register itself, but
             // the previous activation (incarnation of the grain) registered... so, play it safe
@@ -131,7 +143,7 @@ namespace UnitTests.Grains
             else
             {
                 // during failures, there may be reminders registered by an earlier activation that we dont have cached locally
-                // therefore, we need to update our local cache 
+                // therefore, we need to update our local cache
                 await GetMissingReminders();
                 if (this.allReminders.TryGetValue(reminderName, out reminder))
                 {
@@ -194,22 +206,11 @@ namespace UnitTests.Grains
             return string.Format("{0}{1}", this.filePrefix, reminderName);
         }
 
-        public static TimeSpan GetDefaultPeriod(Logger log)
+        public static TimeSpan GetDefaultPeriod(ILogger log)
         {
-            int period = 10; // Seconds
-
-            ClusterConfiguration config = new ClusterConfiguration();
-            config.LoadFromFile("ClientConfigurationForTesting.xml");
-            if (config.Globals.UseAzureSystemStore)
-            {
-                period = 12; // azure operations take more time ... so we use a larger period
-            }
-            else if (config.Globals.UseAdoNetSystemStore)
-            {
-                period = 12; // SQL operations are quite fast ... so we use a shorter period
-            }
+            int period = 12; // Seconds
             var reminderPeriod = TimeSpan.FromSeconds(period);
-            log.Info("Using reminder period of {0} for ReminderServiceType={1} in ReminderTestGrain", reminderPeriod, config.Globals.ReminderServiceType);
+            log.Info("Using reminder period of {0} in ReminderTestGrain", reminderPeriod);
             return reminderPeriod;
         }
 
@@ -232,14 +233,15 @@ namespace UnitTests.Grains
 
         private static long aCCURACY = 50 * TimeSpan.TicksPerMillisecond; // when we use ticks to compute sequence numbers, we might get wrong results as timeouts don't happen with precision of ticks  ... we keep this as a leeway
 
-        private Logger logger;
+        private ILogger logger;
         private long myId; // used to distinguish during debugging between multiple activations of the same grain
 
         private string filePrefix;
 
-        public ReminderTestCopyGrain(IServiceProvider services)
+        public ReminderTestCopyGrain(IServiceProvider services, ILoggerFactory loggerFactory)
         {
             this.unvalidatedReminderRegistry = new UnvalidatedReminderRegistry(services); ;
+            this.logger = loggerFactory.CreateLogger($"{this.GetType().Name}-{this.IdentityString}");
         }
 
         public override async Task OnActivateAsync()
@@ -247,10 +249,9 @@ namespace UnitTests.Grains
             this.myId = new Random().Next();
             this.allReminders = new Dictionary<string, IGrainReminder>();
             this.sequence = new Dictionary<string, long>();
-            this.logger = this.GetLogger(string.Format("ReminderCopyGrain {0}_{1}", this.myId, this.Identity));
             this.period = ReminderTestGrain2.GetDefaultPeriod(this.logger);
             this.logger.Info("OnActivateAsync.");
-            this.filePrefix = "gc" + this.Identity.PrimaryKey + "_";
+            this.filePrefix = "gc" + this.GrainId.Key + "_";
             await GetMissingReminders();
         }
 
@@ -263,7 +264,7 @@ namespace UnitTests.Grains
         public async Task<IGrainReminder> StartReminder(string reminderName, TimeSpan? p = null, bool validate = false)
         {
             TimeSpan usePeriod = p ?? this.period;
-            this.logger.Info("Starting reminder {0} for {1}", reminderName, this.Identity);
+            this.logger.Info("Starting reminder {0} for {1}", reminderName, this.GrainId);
             IGrainReminder r = null;
             if (validate)
                 r = await RegisterOrUpdateReminder(reminderName, /*TimeSpan.FromSeconds(3)*/usePeriod - TimeSpan.FromSeconds(2), usePeriod);
@@ -290,7 +291,7 @@ namespace UnitTests.Grains
 
         public Task ReceiveReminder(string reminderName, TickStatus status)
         {
-            // it can happen that due to failure, when a new activation is created, 
+            // it can happen that due to failure, when a new activation is created,
             // it doesn't know which reminders were registered against the grain
             // hence, this activation may receive a reminder that it didn't register itself, but
             // the previous activation (incarnation of the grain) registered... so, play it safe
@@ -342,7 +343,7 @@ namespace UnitTests.Grains
             else
             {
                 // during failures, there may be reminders registered by an earlier activation that we dont have cached locally
-                // therefore, we need to update our local cache 
+                // therefore, we need to update our local cache
                 await GetMissingReminders();
                 await UnregisterReminder(this.allReminders[reminderName]);
             }
@@ -394,11 +395,15 @@ namespace UnitTests.Grains
 
     public class WrongReminderGrain : Grain, IReminderGrainWrong
     {
-        private Logger logger;
+        private ILogger logger;
+
+        public WrongReminderGrain(ILoggerFactory loggerFactory)
+        {
+            this.logger = loggerFactory.CreateLogger($"{this.GetType().Name}-{this.IdentityString}");
+        }
 
         public override Task OnActivateAsync()
         {
-            this.logger = this.GetLogger(string.Format("WrongReminderGrain_{0}", this.Identity));
             this.logger.Info("OnActivateAsync.");
             return Task.CompletedTask;
         }

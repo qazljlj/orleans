@@ -5,25 +5,47 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Orleans;
+using Orleans.Concurrency;
 using Orleans.Runtime;
 using Orleans.Serialization;
 using Orleans.Storage;
 using TestExtensions;
 using UnitTests.GrainInterfaces;
 using Xunit;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Runtime.Placement;
+using Orleans.TestingHost;
 
 namespace DefaultCluster.Tests.General
 {
-    using Microsoft.Extensions.DependencyInjection;
+    public interface IFooGrain : IGrain { }
+
+    [GrainType("foo`1")]
+    [StatelessWorker]
+    public class FooGrain : Grain, IFooGrain { }
 
     /// <summary>
     /// Summary description for GrainReferenceTest
     /// </summary>
-    [TestCategory("BVT"), TestCategory("Functional"), TestCategory("GrainReference")]
+    [TestCategory("BVT"), TestCategory("GrainReference")]
     public class GrainReferenceTest : HostedTestClusterEnsureDefaultStarted
     {
         public GrainReferenceTest(DefaultClusterFixture fixture) : base(fixture)
         {
+        }
+
+        [Fact]
+        public void GrainReferenceComparison_ShouldProduceUniformHashCode()
+        {
+            var simpleGrain = this.GrainFactory.GetGrain<ISimpleGrain>(1234L, UnitTests.Grains.SimpleGrain.SimpleGrainNamePrefix);
+            var r = simpleGrain as GrainReference;
+            Assert.NotNull(r);
+
+            // Hey there stranger. So the test failed here?
+            // It's probably because the way hash codes are generated for the GrainReference
+            // have changed. If you are sure the new code is repeatable, then it's fine to
+            // update the expected value here. Good luck, friend.
+            Assert.Equal(2223355815u, r.GetUniformHashCode());
         }
 
         [Fact]
@@ -39,7 +61,7 @@ namespace DefaultCluster.Tests.General
             Assert.False(ref2.Equals(ref1));
         }
 
-        [Fact, TestCategory("BVT"), TestCategory("Functional"), TestCategory("AsynchronyPrimitives")]
+        [Fact, TestCategory("BVT"), TestCategory("AsynchronyPrimitives")]
         public void TaskCompletionSource_Resolve()
         {
             string str = "Hello TaskCompletionSource";
@@ -57,7 +79,7 @@ namespace DefaultCluster.Tests.General
         {
             IChainedGrain g1 = this.GrainFactory.GetGrain<IChainedGrain>(GetRandomGrainId());
             IChainedGrain g2 = this.GrainFactory.GetGrain<IChainedGrain>(GetRandomGrainId());
-            
+
             g1.PassThis(g2).Wait();
         }
 
@@ -107,9 +129,8 @@ namespace DefaultCluster.Tests.General
         [Fact, TestCategory("Serialization"), TestCategory("JSON")]
         public async Task GrainReference_Json_Serialization_Nested()
         {
-            var typeResolver = this.HostedCluster.Client.ServiceProvider.GetRequiredService<ITypeResolver>();
-            var settings = OrleansJsonSerializer.GetDefaultSerializerSettings(typeResolver, HostedCluster.GrainFactory);
-            
+            var settings = OrleansJsonSerializer.GetDefaultSerializerSettings(this.HostedCluster.Client.ServiceProvider);
+
             var grain = HostedCluster.GrainFactory.GetGrain<ISimpleGrain>(GetRandomGrainId());
             await grain.SetA(56820);
             var input = new GenericGrainReferenceHolder
@@ -137,39 +158,6 @@ namespace DefaultCluster.Tests.General
         {
             int id = random.Next();
             TestGrainReferenceSerialization(id, false, true);
-        }
-
-        [Fact(Skip = "GrainReference interning is not currently implemented."), TestCategory("Serialization"), TestCategory("Interner")]
-        public void GrainReference_Interning()
-        {
-            var grainId = GrainId.GetGrainIdForTesting(new Guid());
-            var g1 = GrainReference.FromGrainId(grainId, null);
-            var g2 = GrainReference.FromGrainId(grainId, null);
-            Assert.Equal(g1, g2); // Should be equal GrainReferences
-            Assert.Same(g1, g2); // Should be same / interned GrainReference object
-
-            // Round-trip through Serializer
-            var g3 = this.HostedCluster.SerializationManager.RoundTripSerializationForTesting(g1);
-            Assert.Equal(g3, g1);
-            Assert.Equal(g3, g2);
-            Assert.Same(g3, g1);
-            Assert.Same(g3, g2);
-        }
-
-        [Fact(Skip = "GrainReference interning is not currently implemented."), TestCategory("Serialization"), TestCategory("Interner")]
-        public void GrainReference_Interning_Sys_DirectoryGrain()
-        {
-            var g1 = GrainReference.FromGrainId(Constants.DirectoryServiceId, null);
-            var g2 = GrainReference.FromGrainId(Constants.DirectoryServiceId, null);
-            Assert.Equal(g1, g2); // Should be equal GrainReferences.
-            Assert.Same(g1, g2); // Should be same / interned GrainReference object
-
-            // Round-trip through Serializer
-            var g3 = this.HostedCluster.SerializationManager.RoundTripSerializationForTesting(g1);
-            Assert.Equal(g3, g1);
-            Assert.Equal(g3, g2);
-            Assert.Same(g3, g1);
-            Assert.Same(g3, g2);
         }
 
         [Fact(Skip = "GrainReference interning is not currently implemented."), TestCategory("Serialization"), TestCategory("Interner")]
@@ -229,7 +217,8 @@ namespace DefaultCluster.Tests.General
             {
                 var formatter = new BinaryFormatter
                 {
-                    Context = new StreamingContext(StreamingContextStates.All, new SerializationContext(this.HostedCluster.SerializationManager))
+                    Context = new StreamingContext(StreamingContextStates.All, new SerializationContext(this.HostedCluster.SerializationManager)),
+                    SurrogateSelector = this.HostedCluster.Client.ServiceProvider.GetRequiredService<BinaryFormatterGrainReferenceSurrogateSelector>()
                 };
                 formatter.Serialize(memoryStream, obj);
                 memoryStream.Flush();
@@ -241,8 +230,7 @@ namespace DefaultCluster.Tests.General
 
         private T NewtonsoftJsonSerializeRoundtrip<T>(T obj)
         {
-            var typeResolver = this.HostedCluster.Client.ServiceProvider.GetRequiredService<ITypeResolver>();
-            var settings = OrleansJsonSerializer.GetDefaultSerializerSettings(typeResolver, this.GrainFactory);
+            var settings = OrleansJsonSerializer.GetDefaultSerializerSettings(this.HostedCluster.Client.ServiceProvider);
             // http://james.newtonking.com/json/help/index.html?topic=html/T_Newtonsoft_Json_JsonConvert.htm
             string json = JsonConvert.SerializeObject(obj, settings);
             object other = JsonConvert.DeserializeObject(json, typeof(T), settings);

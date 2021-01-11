@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Orleans.Runtime;
 
 namespace Orleans.Streams
 {
@@ -11,10 +12,9 @@ namespace Orleans.Streams
     /// </summary>
     /// <typeparam name="T">The type of object that flows through the stream.</typeparam>
     public interface IAsyncStream<T> :
-        IStreamIdentity, // identity
         IEquatable<IAsyncStream<T>>, IComparable<IAsyncStream<T>>, // comparison
         IAsyncObservable<T>, IAsyncBatchObservable<T>, // observables
-        IAsyncObserver<T> // observers
+        IAsyncBatchProducer<T> // observers
     {
         /// <summary>
         /// Determines whether this is a rewindable stream - supports subscribing from previous point in time.
@@ -24,6 +24,8 @@ namespace Orleans.Streams
 
         /// <summary> Stream Provider Name. </summary>
         string ProviderName { get; }
+
+        StreamId StreamId { get; }
 
         /// <summary>
         /// Retrieves a list of all active subscriptions created by the caller for this stream.

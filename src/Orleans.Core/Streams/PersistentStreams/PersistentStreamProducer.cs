@@ -4,6 +4,8 @@ using Orleans.Runtime;
 using Orleans.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Generic;
+
 namespace Orleans.Streams
 {
     internal class PersistentStreamProducer<T> : IInternalAsyncBatchObserver<T>
@@ -20,14 +22,19 @@ namespace Orleans.Streams
             this.queueAdapter = queueAdapter;
             this.serializationManager = serializationManager;
             IsRewindable = isRewindable;
-            var logger = providerUtilities.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(this.GetType().Name);
+            var logger = providerUtilities.ServiceProvider.GetRequiredService<ILogger<PersistentStreamProducer<T>>>();
             if (logger.IsEnabled(LogLevel.Debug)) logger.Debug("Created PersistentStreamProducer for stream {0}, of type {1}, and with Adapter: {2}.",
                 stream.ToString(), typeof (T), this.queueAdapter.Name);
         }
 
         public Task OnNextAsync(T item, StreamSequenceToken token)
         {
-            return this.queueAdapter.QueueMessageAsync(this.stream.StreamId.Guid, this.stream.StreamId.Namespace, item, token, RequestContextExtensions.Export(this.serializationManager));
+            return this.queueAdapter.QueueMessageAsync(this.stream.StreamId, item, token, RequestContextExtensions.Export(this.serializationManager));
+        }
+        
+        public Task OnNextBatchAsync(IEnumerable<T> batch, StreamSequenceToken token)
+        {
+            return this.queueAdapter.QueueMessageBatchAsync(this.stream.StreamId, batch, token, RequestContextExtensions.Export(this.serializationManager));
         }
 
         public Task OnCompletedAsync()

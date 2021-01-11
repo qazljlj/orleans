@@ -18,6 +18,7 @@ using TestExtensions;
 using UnitTests.GrainInterfaces;
 using UnitTests.Grains.ProgrammaticSubscribe;
 using Xunit;
+using System.IO;
 
 namespace ServiceBus.Tests.SlowConsumingTests
 {
@@ -40,21 +41,25 @@ namespace ServiceBus.Tests.SlowConsumingTests
                 builder.AddSiloBuilderConfigurator<MySiloBuilderConfigurator>();
             }
 
-            private class MySiloBuilderConfigurator : ISiloBuilderConfigurator
+            private class MySiloBuilderConfigurator : ISiloConfigurator
             {
-                public void Configure(ISiloHostBuilder hostBuilder)
+                public void Configure(ISiloBuilder hostBuilder)
                 {
-                    hostBuilder.AddPersistentStreams(StreamProviderName, EHStreamProviderWithCreatedCacheListAdapterFactory.Create, b=>
-                        b.Configure<EventHubStreamCachePressureOptions>(ob => ob.Configure(options =>
-                           {
-                               options.SlowConsumingMonitorPressureWindowSize = monitorPressureWindowSize;
-                               options.SlowConsumingMonitorFlowControlThreshold = flowControlThredhold;
-                               options.AveragingCachePressureMonitorFlowControlThreshold = null;
-                           }))
-                           .ConfigureComponent<IStreamQueueCheckpointerFactory>((s,n)=>NoOpCheckpointerFactory.Instance)
-                           .UseDynamicClusterConfigDeploymentBalancer());
-                    hostBuilder
-                    .AddMemoryGrainStorage("PubSubStore");
+                    hostBuilder.AddPersistentStreams(
+                        StreamProviderName,
+                        EHStreamProviderWithCreatedCacheListAdapterFactory.Create,
+                        b=>
+                        {
+                            b.Configure<EventHubStreamCachePressureOptions>(ob => ob.Configure(options =>
+                            {
+                                options.SlowConsumingMonitorPressureWindowSize = monitorPressureWindowSize;
+                                options.SlowConsumingMonitorFlowControlThreshold = flowControlThredhold;
+                                options.AveragingCachePressureMonitorFlowControlThreshold = null;
+                            }));
+                            b.ConfigureComponent<IStreamQueueCheckpointerFactory>((s, n) => NoOpCheckpointerFactory.Instance);
+                            b.UseDynamicClusterConfigDeploymentBalancer();
+                        });
+                    hostBuilder.AddMemoryGrainStorage("PubSubStore");
                 }
             }
         }
@@ -71,14 +76,15 @@ namespace ServiceBus.Tests.SlowConsumingTests
         [Fact, TestCategory("Functional")]
         public async Task EHSlowConsuming_ShouldFavorSlowConsumer()
         {
-            var streamId = new FullStreamIdentity(Guid.NewGuid(), StreamNamespace, StreamProviderName);
+            var streamGuid = Guid.NewGuid();
+            var streamId = StreamId.Create(StreamNamespace, streamGuid);
             //set up one slow consumer grain
             var slowConsumer = this.fixture.GrainFactory.GetGrain<ISlowConsumingGrain>(Guid.NewGuid());
-            await slowConsumer.BecomeConsumer(streamId.Guid, StreamNamespace, StreamProviderName);
+            await slowConsumer.BecomeConsumer(streamGuid, StreamNamespace, StreamProviderName);
 
             //set up 30 healthy consumer grain to show how much we favor slow consumer 
             int healthyConsumerCount = 30;
-            var healthyConsumers = await SetUpHealthyConsumerGrain(this.fixture.GrainFactory, streamId.Guid, StreamNamespace, StreamProviderName, healthyConsumerCount);
+            var healthyConsumers = await SetUpHealthyConsumerGrain(this.fixture.GrainFactory, streamGuid, StreamNamespace, StreamProviderName, healthyConsumerCount);
 
             //configure data generator for stream and start producing
             var mgmtGrain = this.fixture.GrainFactory.GetGrain<IManagementGrain>(0);
